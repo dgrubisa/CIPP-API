@@ -124,7 +124,6 @@ function Push-DomainAnalyserDomain {
     } catch {
         $Message = 'SPF Error'
         Write-LogMessage -API 'DomainAnalyser' -tenant $DomainObject.TenantId -message $Message -LogData (Get-CippException -Exception $_) -sev Error
-        return $Message
     }
 
     # Check SPF Record
@@ -187,7 +186,7 @@ function Push-DomainAnalyserDomain {
     } catch {
         $Message = 'DMARC Error'
         Write-LogMessage -API 'DomainAnalyser' -tenant $DomainObject.TenantId -message $Message -LogData (Get-CippException -Exception $_) -sev Error
-        return $Message
+        #return $Message
     }
 
     # DNS Sec Check
@@ -205,7 +204,7 @@ function Push-DomainAnalyserDomain {
     } catch {
         $Message = 'DNSSEC Error'
         Write-LogMessage -API 'DomainAnalyser' -tenant $DomainObject.TenantId -message $Message -LogData (Get-CippException -Exception $_) -sev Error
-        return $Message
+        #return $Message
     }
 
     # DKIM Check
@@ -216,6 +215,12 @@ function Push-DomainAnalyserDomain {
         }
         if (![string]::IsNullOrEmpty($DomainObject.DkimSelectors)) {
             $DkimParams.Selectors = $DomainObject.DkimSelectors | ConvertFrom-Json
+        }
+        # Check if its a onmicrosoft.com domain and add special selectors for these
+        if ($Domain -match 'onmicrosoft.com' -and $Domain -notmatch 'mail.onmicrosoft.com') {
+            $DKIMSelector1Value = "selector1-$($Domain -replace '\.', '-' )"
+            $DKIMSelector2Value = "selector2-$($Domain -replace '\.', '-' )"
+            $DkimParams.Add('Selectors', @("$DKIMSelector1Value", "$DKIMSelector2Value"))
         }
 
         $DkimRecord = Read-DkimRecord @DkimParams -ErrorAction Stop
@@ -234,7 +239,7 @@ function Push-DomainAnalyserDomain {
     } catch {
         $Message = 'DKIM Exception'
         Write-LogMessage -API 'DomainAnalyser' -tenant $DomainObject.TenantId -message $Message -LogData (Get-CippException -Exception $_) -sev Error
-        return $Message
+        #return $Message
     }
 
     # Get Microsoft DKIM CNAME selector Records
@@ -250,12 +255,15 @@ function Push-DomainAnalyserDomain {
                 continue
             }
             # Test if there are already MSCNAME values set, skip domain if there is
-            $CurrentMSCNAMEInfo = ConvertFrom-Json $DomainObject.DomainAnalyser -Depth 10
-            if (![string]::IsNullOrWhiteSpace($CurrentMSCNAMEInfo.MSCNAMEDKIMSelectors.selector1.Value) -and
-                ![string]::IsNullOrWhiteSpace($CurrentMSCNAMEInfo.MSCNAMEDKIMSelectors.selector2.Value)) {
-                $Result.MSCNAMEDKIMSelectors = $CurrentMSCNAMEInfo.MSCNAMEDKIMSelectors
-                continue
+            if ($null -ne $DomainObject.DomainAnalyser) {
+                $CurrentMSCNAMEInfo = ConvertFrom-Json $DomainObject.DomainAnalyser -Depth 10
+                if (![string]::IsNullOrWhiteSpace($CurrentMSCNAMEInfo.MSCNAMEDKIMSelectors.selector1.Value) -and
+                    ![string]::IsNullOrWhiteSpace($CurrentMSCNAMEInfo.MSCNAMEDKIMSelectors.selector2.Value)) {
+                    $Result.MSCNAMEDKIMSelectors = $CurrentMSCNAMEInfo.MSCNAMEDKIMSelectors
+                    continue
+                }
             }
+
 
             # Compute the DKIM CNAME records from $Tenant.InitialDomainName according to this logic: https://learn.microsoft.com/en-us/defender-office-365/email-authentication-dkim-configure#syntax-for-dkim-cname-records
             # Test if it has a - in the domain name
@@ -292,9 +300,8 @@ function Push-DomainAnalyserDomain {
             }
             $Result.MSCNAMEDKIMSelectors = $MSCNAMERecords
         } catch {
-            $Message = 'MS DKIM CNAME Error'
-            Write-LogMessage -API 'DomainAnalyser' -tenant $DomainObject.TenantId -message $Message -LogData (Get-CippException -Exception $_) -sev Error
-            return $Message
+            $ErrorMessage = Get-CippException -Exception $_
+            Write-LogMessage -API 'DomainAnalyser' -tenant $DomainObject.TenantId -message "MS CNAME DKIM error: $($ErrorMessage.NormalizedError)" -LogData $ErrorMessage -sev Error
         }
     }
 
